@@ -8,7 +8,9 @@ irked me while looking for a file. The `cd/ls/cd/ls/cd/ls` loop quickly gets
 tedious. And opening my file manager, navigating to the folder I'm in, find the
 thing I was looking for, and then copying the path back is even worse. So I
 created this thing, TermFM, short for "Terminal File Manager". This is
-currently in a PoC state, and only supports the basic premise of the idea:
+currently in a PoC state, and only supports the basic premise of the idea. Here
+is a YouTube video I recorded of how it works:
+
 [![IMAGE ALT TEXT HERE](https://img.youtube.com/vi/KoSbxQ_UlyA/0.jpg)](https://www.youtube.com/watch?v=KoSbxQ_UlyA)
 
 ## Setup
