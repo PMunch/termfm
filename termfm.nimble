@@ -1,6 +1,6 @@
 # Package
 
-version       = "0.1.0"
+version       = "0.2.0"
 author        = "Peter Munch-Ellingsen"
 description   = "A simple file manager that mirrors what your terminal does"
 license       = "MIT"

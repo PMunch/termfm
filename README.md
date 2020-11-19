@@ -27,7 +27,7 @@ PROMPT='$(store_dir)' # For zsh, same as above
 
 Then you can simply run TermFM whenever you want:
 ```
-termfm $WINDOWID
+termfm $WINDOWID &
 ```
 
 As you can see the program takes in the X11 window ID to read the property of
@@ -41,7 +41,8 @@ Pretty much everything. Things that could be implemented, in no particular
 order:
 
 - Scrolling
-- Options for fonts/colours/icons (preferably following the colour scheme of ls)
+- Options for fonts/icons
+- Support the various file type colours
 - Some kind of check if the terminal is ready for input
 - Clear whatever is on the terminal input line before typing
 - Different icons for different files

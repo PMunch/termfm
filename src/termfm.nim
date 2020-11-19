@@ -1,4 +1,5 @@
-import os, strutils, times, osproc
+import os, strutils, times, osproc, tables
+import types, xresources, lscolors
 import imlib2
 import x11 / [x, xlib, xutil]
 
@@ -7,10 +8,6 @@ converter intToCuint(x: int): cuint = x.cuint
 converter pintToPcint(x: ptr int): ptr cint = cast[ptr cint](x)
 converter boolToXBool(x: bool): XBool = x.XBool
 converter xboolToBool(x: XBool): bool = x.bool
-
-type
-  Color = object
-    r, g, b, a: int
 
 var
   disp: PDisplay
@@ -24,6 +21,7 @@ var
   height = 200
   winId = parseInt(paramStr(1))
   currentPath = getCurrentDir()
+  offset = 0
 
 disp  = XOpenDisplay(nil)
 vis   = DefaultVisual(disp, DefaultScreen(disp))
@@ -64,11 +62,11 @@ imlib_context_set_visual(vinfo.visual)
 imlib_context_set_colormap(wa.colormap)
 
 var
-  folderIcon = "icons/folder.png"
-  fileIcon = "icons/file.png"
+  folderIcon = getAppDir() / "icons/folder.png"
+  fileIcon =  getAppDir() / "icons/file.png"
   fontName = "JetBrains Mono Medium Nerd Font Complete Mono/10"
-  bg = Color(r: 40, g: 42, b: 52, a: 255)
-  text = Color(r: 80, g: 250, b: 23, a: 255)
+  #bg = Color(r: 40, g: 42, b: 52, a: 255)
+  #text = Color(r: 80, g: 250, b: 23, a: 255)
 
 var
   win = XCreateWindow(disp, DefaultRootWindow(disp), 0, 0, width, height, 0,
@@ -77,6 +75,8 @@ var
     CWColormap or CWEventMask, wa.addr)
   deleteAtom = XInternAtom(disp, "WM_DELETE_WINDOW", true)
   customFolder = XInternAtom(disp, "_CUSTOM_FOLDER", true)
+  resources = loadColors()
+  colors = resources.loadColors()
 
 discard XSetWMProtocols(disp, win, deleteAtom.addr, 1)
 discard XSelectInput(disp, win, KeyPressMask or ButtonPressMask or ButtonReleaseMask or
@@ -100,7 +100,7 @@ proc getProperty(window: Window, name: Atom): string =
   discard XFree(prop_return)
 
 while true:
-  while XPending(disp) > 0:
+  while updates == nil or XPending(disp) > 0:
     discard XNextEvent(disp, ev.addr)
     case ev.theType:
     of Expose:
@@ -121,10 +121,11 @@ while true:
       if ev.xclient.data.l[0] == deleteAtom.clong:
         quit 0
     of ButtonRelease:
-      if ev.xbutton.button == 1:
+      case ev.xbutton.button:
+      of 1:
         var
           x = 32
-          y = 32
+          y = 32 - offset * 64
         template testClick(): untyped =
           let path = f.relativePath(currentPath)
           var
@@ -145,14 +146,23 @@ while true:
           testClick()
         #for f in walkFiles(currentPath & "/*"):
         #  testClick()
+      of 4: dec offset
+      of 5: inc offset
+      else:
+        discard
+      if offset < 0: offset = 0
+      updates = imlib_update_append_rect(
+        updates,
+        0, 0, width, height)
     of PropertyNotify:
       if ev.xproperty.atom == customFolder:
         let newPath = getProperty(winId.Window, customFolder)
         if newPath != currentPath:
           currentPath = newPath
-        updates = imlib_update_append_rect(
-          updates,
-          0, 0, width, height)
+          offset = 0
+          updates = imlib_update_append_rect(
+            updates,
+            0, 0, width, height)
     of KeyPress:
       discard
     else:
@@ -174,13 +184,13 @@ while true:
     imlib_image_set_has_alpha(1)
     imlib_context_set_blend(1)
     imlib_image_clear()
-    imlib_context_set_color(bg.r, bg.g, bg.b, bg.a)
+    imlib_context_set_color(resources.background.r, resources.background.g, resources.background.b, resources.background.a)
     imlib_image_fill_rectangle(-upX, -upY, width, height)
-    imlib_context_set_blend(0)
+    imlib_context_set_blend(1)
     var
       x = -upX + 32
-      y = -upY + 32
-    template draw(icon: string): untyped =
+      y = -upY + 32 - offset * 64
+    template draw(icon: string, isFile: bool): untyped =
       let path = f.relativePath(currentPath)
       let image = imlib_load_image(icon)
       imlib_context_set_image(buffer)
@@ -188,26 +198,41 @@ while true:
         64, 64, x, y, 64, 64)
       imlib_context_set_image(image)
       imlib_free_image()
-      imlib_context_set_image(buffer)
       var
         font = imlib_load_font(fontName)
         tw = 0
         th = 0
       imlib_context_set_font(font)
       imlib_get_text_size(path[0].unsafeAddr, tw.addr, th.addr)
-      imlib_context_set_color(text.r, text.g, text.b, text.a)
-      imlib_text_draw(x + 64 - ((tw + 64) div 2), y + 64, path[0].unsafeAddr)
+      var textBuffer = imlib_create_image(96, th)
+      imlib_context_set_image(textBuffer)
+      imlib_image_set_has_alpha(1)
+      imlib_image_clear()
+      when isFile:
+        let
+          extension = path.splitFile()[2]
+          color = colors.extensions.getOrDefault(extension, colors.file)
+        imlib_context_set_color(color.r, color.g, color.b, color.a)
+      else:
+        imlib_context_set_color(colors.directory.r, colors.directory.g, colors.directory.b, colors.directory.a)
+      imlib_text_draw((96 div 2) - (min(tw, 96) div 2), 0, path[0].unsafeAddr)
       imlib_free_font()
+      imlib_context_set_image(buffer)
+      imlib_context_set_blend(1)
+      imlib_blend_image_onto_image(textBuffer, 255, 0, 0, 96, th, x - 16, y + 64, 96, th)
+      imlib_context_set_image(textBuffer)
+      imlib_free_image()
       x += 64 + 32
       if x + 64 + 32 > width:
         y += 64 + 32 + th
         x = 32
     var f = currentPath & "/.."
-    draw(folderIcon)
+    draw(folderIcon, false)
     for f in walkDirs(currentPath & "/*"):
-      draw(folderIcon)
+      draw(folderIcon, false)
     for f in walkFiles(currentPath & "/*"):
-      draw(fileIcon)
+      draw(fileIcon, true)
+    imlib_context_set_blend(0)
     # set the buffer image as our current image
     imlib_context_set_image(buffer)
     # render the image at 0, 0
@@ -220,5 +245,3 @@ while true:
   if updates != nil:
     imlib_updates_free(updates)
     updates = nil
-  sleep(10)
-
