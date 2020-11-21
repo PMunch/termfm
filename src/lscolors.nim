@@ -118,7 +118,6 @@ proc loadColors*(colors: XResources): LSColors =
   result.door = colors.foreground
   result.blockDevice = colors.foreground
   result.charDevice = colors.foreground
-  result.orphan = colors.foreground
   result.socket = colors.foreground
   result.setuid = colors.foreground
   result.setgid = colors.foreground
@@ -154,3 +153,5 @@ proc loadColors*(colors: XResources): LSColors =
     else:
       if key.startsWith "*.":
         result.extensions[key[1..^1]] = parseColor(colors, value)
+  if result.orphan == default(Color):
+    result.orphan = result.link

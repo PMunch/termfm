@@ -1,4 +1,4 @@
-import os, strutils, times, osproc, tables
+import os, strutils, times, osproc, tables, posix, algorithm
 import types, xresources, lscolors
 import imlib2
 import x11 / [x, xlib, xutil]
@@ -8,6 +8,13 @@ converter intToCuint(x: int): cuint = x.cuint
 converter pintToPcint(x: ptr int): ptr cint = cast[ptr cint](x)
 converter boolToXBool(x: bool): XBool = x.XBool
 converter xboolToBool(x: XBool): bool = x.bool
+
+type Entry = object
+  name: string
+  path: string
+  icon: string
+  directory: bool
+  color: Color
 
 var
   disp: PDisplay
@@ -22,6 +29,7 @@ var
   winId = parseInt(paramStr(1))
   currentPath = getCurrentDir()
   offset = 0
+  entries: seq[Entry]
 
 disp  = XOpenDisplay(nil)
 vis   = DefaultVisual(disp, DefaultScreen(disp))
@@ -99,6 +107,49 @@ proc getProperty(window: Window, name: Atom): string =
   result = $prop_return
   discard XFree(prop_return)
 
+proc updateEntries() =
+  entries = @[Entry(name: "..", path: currentPath & "/..", icon: folderIcon, directory: true, color: colors.directory)]
+  for fullPath in walkPattern(currentPath & "/*"):
+    let
+      relPath = fullPath.relativePath(currentPath)
+      extension = relPath.splitFile()[2]
+    var s: Stat
+    discard lstat(fullPath, s)
+    let mode = s.st_mode
+    entries.add Entry(name: relPath, path: fullPath, directory: false)
+    case mode.cint and S_IFMT:
+    of S_IFDIR:
+      entries[^1].color = colors.directory
+      entries[^1].directory = true
+      entries[^1].icon = folderIcon
+    of S_IFREG:
+      entries[^1].color = colors.extensions.getOrDefault(extension, colors.file)
+      entries[^1].icon = fileIcon
+    of S_IFLNK:
+      entries[^1].color = if fullPath.fileExists(): colors.link else: colors.orphan
+      entries[^1].icon = fileIcon
+    of S_IFCHR:
+      entries[^1].color = colors.charDevice
+      entries[^1].icon = fileIcon
+    of S_IFBLK:
+      entries[^1].color = colors.blockDevice
+      entries[^1].icon = fileIcon
+    of S_IFIFO:
+      entries[^1].color = colors.pipe
+      entries[^1].icon = fileIcon
+    else:
+      entries[^1].color = colors.normal
+      entries[^1].icon = fileIcon
+    if (mode.cint and (S_IXUSR or S_IXGRP or S_IXOTH)) != 0 and not S_ISLNK(mode) and not S_ISDIR(mode):
+      entries[^1].color = colors.executable
+  entries.sort proc (x, y: Entry): int =
+    if x.directory == y.directory:
+      cmp(x.name, y.name)
+    else:
+      if x.directory: -1
+      else: 1
+
+updateEntries()
 while true:
   while updates == nil or XPending(disp) > 0:
     discard XNextEvent(disp, ev.addr)
@@ -126,26 +177,20 @@ while true:
         var
           x = 32
           y = 32 - offset * 64
-        template testClick(): untyped =
-          let path = f.relativePath(currentPath)
+        for entry in entries:
+          if not entry.directory: break
           var
             font = imlib_load_font(fontName)
             tw = 0
             th = 0
           imlib_context_set_font(font)
-          imlib_get_text_size(path[0].unsafeAddr, tw.addr, th.addr)
+          imlib_get_text_size(entry.name[0].unsafeAddr, tw.addr, th.addr)
           if ev.xbutton.x > x and ev.xbutton.x < x + 64 and ev.xbutton.y > y and ev.xbutton.y < y + 64 + th:
-            discard execCmd("xdotool type --delay 0 --window " & $winId & " \"cd " & f & "\n\"")
+            discard execCmd("xdotool type --delay 0 --window " & $winId & " \" cd " & entry.path & "\n\"")
           x += 64 + 32
           if x + 64 + 32 > width:
             y += 64 + 32 + th
             x = 32
-        var f = currentPath & "/.."
-        testClick()
-        for f in walkDirs(currentPath & "/*"):
-          testClick()
-        #for f in walkFiles(currentPath & "/*"):
-        #  testClick()
       of 4: dec offset
       of 5: inc offset
       else:
@@ -158,11 +203,12 @@ while true:
       if ev.xproperty.atom == customFolder:
         let newPath = getProperty(winId.Window, customFolder)
         if newPath != currentPath:
-          currentPath = newPath
           offset = 0
-          updates = imlib_update_append_rect(
-            updates,
-            0, 0, width, height)
+          currentPath = newPath
+        updateEntries()
+        updates = imlib_update_append_rect(
+          updates,
+          0, 0, width, height)
     of KeyPress:
       discard
     else:
@@ -190,9 +236,8 @@ while true:
     var
       x = -upX + 32
       y = -upY + 32 - offset * 64
-    template draw(icon: string, isFile: bool): untyped =
-      let path = f.relativePath(currentPath)
-      let image = imlib_load_image(icon)
+    for entry in entries:
+      let image = imlib_load_image(entry.icon)
       imlib_context_set_image(buffer)
       imlib_blend_image_onto_image(image, 255, 0, 0,
         64, 64, x, y, 64, 64)
@@ -203,19 +248,13 @@ while true:
         tw = 0
         th = 0
       imlib_context_set_font(font)
-      imlib_get_text_size(path[0].unsafeAddr, tw.addr, th.addr)
+      imlib_get_text_size(entry.name[0].unsafeAddr, tw.addr, th.addr)
       var textBuffer = imlib_create_image(96, th)
       imlib_context_set_image(textBuffer)
       imlib_image_set_has_alpha(1)
       imlib_image_clear()
-      when isFile:
-        let
-          extension = path.splitFile()[2]
-          color = colors.extensions.getOrDefault(extension, colors.file)
-        imlib_context_set_color(color.r, color.g, color.b, color.a)
-      else:
-        imlib_context_set_color(colors.directory.r, colors.directory.g, colors.directory.b, colors.directory.a)
-      imlib_text_draw((96 div 2) - (min(tw, 96) div 2), 0, path[0].unsafeAddr)
+      imlib_context_set_color(entry.color.r, entry.color.g, entry.color.b, entry.color.a)
+      imlib_text_draw((96 div 2) - (min(tw, 96) div 2), 0, entry.name[0].unsafeAddr)
       imlib_free_font()
       imlib_context_set_image(buffer)
       imlib_context_set_blend(1)
@@ -226,12 +265,6 @@ while true:
       if x + 64 + 32 > width:
         y += 64 + 32 + th
         x = 32
-    var f = currentPath & "/.."
-    draw(folderIcon, false)
-    for f in walkDirs(currentPath & "/*"):
-      draw(folderIcon, false)
-    for f in walkFiles(currentPath & "/*"):
-      draw(fileIcon, true)
     imlib_context_set_blend(0)
     # set the buffer image as our current image
     imlib_context_set_image(buffer)
